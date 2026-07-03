@@ -123,13 +123,15 @@ def clean_text(s: str) -> str:
 
 # 네이버 API가 긴 제목을 "..."로 잘라서 주므로, 기사 페이지의 og:title에서 원제목을 가져옴
 def _og_meta(head: str, prop: str):
+    # content 속성값은 여는 따옴표와 같은 종류의 따옴표까지 읽음
+    # (제목 안에 다른 종류 따옴표가 있어도 잘리지 않게)
     for pattern in (
-        re.compile(rf'<meta[^>]+property=["\']og:{prop}["\'][^>]+content=["\']([^"\']+)["\']', re.I),
-        re.compile(rf'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:{prop}["\']', re.I),
+        re.compile(rf'<meta[^>]+property=["\']og:{prop}["\'][^>]+content=(["\'])(?P<v>.*?)\1', re.I),
+        re.compile(rf'<meta[^>]+content=(["\'])(?P<v>.*?)\1[^>]+property=["\']og:{prop}["\']', re.I),
     ):
         m = pattern.search(head)
         if m:
-            value = clean_text(m.group(1))
+            value = clean_text(m.group("v"))
             if value:
                 return value
     return None
@@ -144,13 +146,22 @@ def strip_site_name(title: str, site_name) -> str:
         return m.group(1).strip(" |-–—:")
     return title
 
-def fetch_full_title(url: str):
-    """기사 페이지 앞부분만 받아 og:title 추출 (매체명 꼬리표 제거). 실패하면 None."""
+# 일부 언론사가 서버(데이터센터) 접속을 차단하므로 실제 브라우저처럼 요청
+BROWSER_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "ko-KR,ko;q=0.9",
+}
+
+def _fetch_og_title(url: str):
     try:
-        resp = requests.get(
-            url, timeout=10, stream=True,
-            headers={"User-Agent": "Mozilla/5.0 (compatible; newsbot)"},
-        )
+        resp = requests.get(url, timeout=10, stream=True, headers=BROWSER_HEADERS)
+        if not resp.ok:
+            resp.close()
+            return None
         chunk = next(resp.iter_content(65536), b"") or b""
         resp.close()
     except requests.RequestException:
@@ -160,6 +171,19 @@ def fetch_full_title(url: str):
         title = _og_meta(head, "title")
         if title:
             return strip_site_name(title, _og_meta(head, "site_name"))
+    return None
+
+def fetch_full_title(article: dict):
+    """기사 원문 → (실패 시) 네이버 뉴스 페이지 순으로 og:title 추출. 실패하면 None."""
+    title = _fetch_og_title(article["link"])
+    if title:
+        return title
+    naver_link = article.get("naver_link")
+    if naver_link and naver_link != article["link"]:
+        title = _fetch_og_title(naver_link)
+        if title:
+            return title
+    print(f"  [!] 제목 복원 실패: {article['link']}")
     return None
 
 def search_naver(keyword: str) -> list:
@@ -184,6 +208,7 @@ def search_naver(keyword: str) -> list:
             "title": clean_text(item.get("title")),
             "description": clean_text(item.get("description")),
             "link": item.get("originallink") or item.get("link"),
+            "naver_link": item.get("link"),  # 제목 복원 2차 시도용
             "published": pub,
         })
     return articles
@@ -295,7 +320,7 @@ def check_once(seen: dict, first_run: bool) -> None:
         save_seen(seen)  # 전송 도중 중단돼도 중복 전송을 막기 위해 미리 저장
         for a in reversed(to_send):  # 오래된 것부터 전송
             if a["title"].endswith(("...", "…")):  # 잘린 제목이면 원제목 시도
-                full_title = fetch_full_title(a["link"])
+                full_title = fetch_full_title(a)
                 if full_title:
                     a["title"] = full_title
             if send_telegram(build_message(a)):
