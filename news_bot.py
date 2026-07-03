@@ -73,6 +73,7 @@ def passes_filter(article: dict, kw: dict) -> bool:
 INTERVAL_MINUTES = float(os.getenv("INTERVAL_MINUTES", "5"))
 MAX_PER_KEYWORD = int(os.getenv("MAX_PER_KEYWORD", "5"))      # 1회 검색당 키워드별 최대 전송 수 (0 이하 = 무제한)
 FIRST_RUN_SEND = int(os.getenv("FIRST_RUN_SEND", "3"))        # 최초 실행 시 키워드별 전송 수
+MAX_AGE_HOURS = float(os.getenv("MAX_AGE_HOURS", "6"))        # 이보다 오래된 기사는 기록만 하고 전송 안 함
 
 NAVER_CLIENT_ID = os.getenv("NAVER_CLIENT_ID", "").strip()
 NAVER_CLIENT_SECRET = os.getenv("NAVER_CLIENT_SECRET", "").strip()
@@ -165,7 +166,7 @@ def search_naver(keyword: str) -> list:
     """네이버 뉴스 검색 API (최신순)"""
     resp = requests.get(
         "https://openapi.naver.com/v1/search/news.json",
-        params={"query": keyword, "display": 20, "sort": "date"},
+        params={"query": keyword, "display": 100, "sort": "date"},
         headers={
             "X-Naver-Client-Id": NAVER_CLIENT_ID,
             "X-Naver-Client-Secret": NAVER_CLIENT_SECRET,
@@ -272,21 +273,24 @@ def check_once(seen: dict, first_run: bool) -> None:
 
         fresh = [a for a in articles if a["link"] and a["link"] not in seen]
         matched = [a for a in fresh if passes_filter(a, kw)]
+        cutoff = datetime.now(KST) - timedelta(hours=MAX_AGE_HOURS)
+        recent = [a for a in matched if a["published"] >= cutoff]
         if first_run:
             limit = FIRST_RUN_SEND
         else:
             limit = MAX_PER_KEYWORD if MAX_PER_KEYWORD > 0 else None  # None = 무제한
-        to_send = matched[:limit]
+        to_send = recent[:limit]
 
-        # 전송하지 않는 기사(필터 탈락 포함)도 '본 것'으로 기록
+        # 전송하지 않는 기사(필터 탈락·오래된 기사 포함)도 '본 것'으로 기록
         stamp = time.time()
         for a in fresh:
             seen[a["link"]] = stamp
 
         filtered_out = len(fresh) - len(matched)
+        too_old = len(matched) - len(recent)
         print(
             f"[{now}] '{kw['query']}': 새 기사 {len(fresh)}건"
-            f" (필터 제외 {filtered_out}건), {len(to_send)}건 전송"
+            f" (필터 제외 {filtered_out}건, 오래된 기사 제외 {too_old}건), {len(to_send)}건 전송"
         )
         save_seen(seen)  # 전송 도중 중단돼도 중복 전송을 막기 위해 미리 저장
         for a in reversed(to_send):  # 오래된 것부터 전송
