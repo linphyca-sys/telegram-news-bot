@@ -33,9 +33,9 @@ BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 
 def parse_keyword_line(line: str) -> dict:
-    """'검색어 | 제외: a, b | 포함: x, y' 형식 파싱. 필터는 선택사항."""
+    """'검색어 | 제외: a, b | 포함: x, y | 보호: p, q' 형식 파싱. 필터는 선택사항."""
     parts = [p.strip() for p in line.split("|")]
-    kw = {"query": parts[0], "include": [], "exclude": []}
+    kw = {"query": parts[0], "include": [], "exclude": [], "protect": []}
     for part in parts[1:]:
         if ":" not in part:
             continue
@@ -45,6 +45,8 @@ def parse_keyword_line(line: str) -> dict:
             kw["exclude"] = words
         elif label.strip() in ("포함", "include"):
             kw["include"] = words
+        elif label.strip() in ("보호", "protect"):
+            kw["protect"] = words
     return kw
 
 KEYWORDS = [
@@ -63,9 +65,10 @@ if not KEYWORDS:
         ]
 
 def passes_filter(article: dict, kw: dict) -> bool:
-    """제외 단어가 하나라도 있으면 탈락, 포함 단어가 지정됐으면 하나는 있어야 통과."""
+    """제외 단어가 있으면 탈락 — 단, 보호 단어가 함께 있으면 통과.
+    포함 단어가 지정됐으면 하나는 있어야 통과."""
     text = f"{article['title']} {article['description']}"
-    if any(w in text for w in kw["exclude"]):
+    if any(w in text for w in kw["exclude"]) and not any(w in text for w in kw["protect"]):
         return False
     if kw["include"] and not any(w in text for w in kw["include"]):
         return False
