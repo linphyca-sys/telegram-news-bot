@@ -5,6 +5,7 @@
 - 뉴스 소스: 네이버 뉴스 검색 API (키가 있으면) / 구글 뉴스 RSS (키가 없으면)
 """
 
+import csv
 import html
 import json
 import os
@@ -78,7 +79,25 @@ NAVER_CLIENT_SECRET = os.getenv("NAVER_CLIENT_SECRET", "").strip()
 USE_NAVER = bool(NAVER_CLIENT_ID and NAVER_CLIENT_SECRET)
 
 SEEN_FILE = BASE_DIR / "seen_links.json"
+CSV_FILE = BASE_DIR / "articles.csv"
 KST = timezone(timedelta(hours=9))
+
+def log_to_csv(keyword: str, article: dict) -> None:
+    """전송한 기사를 articles.csv에 누적 기록 (엑셀에서 바로 열림)"""
+    new_file = not CSV_FILE.exists()
+    # 새 파일일 때만 BOM(utf-8-sig)을 써서 엑셀이 한글을 제대로 인식하게 함
+    with CSV_FILE.open("a", newline="", encoding="utf-8-sig" if new_file else "utf-8") as f:
+        writer = csv.writer(f)
+        if new_file:
+            writer.writerow(["전송시각", "키워드", "기사시각", "제목", "요약", "링크"])
+        writer.writerow([
+            datetime.now(KST).strftime("%Y-%m-%d %H:%M"),
+            keyword,
+            article["published"].strftime("%Y-%m-%d %H:%M"),
+            article["title"],
+            article["description"],
+            article["link"],
+        ])
 
 # ── 본 기사 중복 관리 ─────────────────────────────────────────────
 def load_seen() -> dict:
@@ -227,7 +246,8 @@ def check_once(seen: dict, first_run: bool) -> None:
         )
         save_seen(seen)  # 전송 도중 중단돼도 중복 전송을 막기 위해 미리 저장
         for a in reversed(to_send):  # 오래된 것부터 전송
-            send_telegram(build_message(a))
+            if send_telegram(build_message(a)):
+                log_to_csv(kw["query"], a)
             time.sleep(1)  # 텔레그램 rate limit 여유
 
 def main() -> None:
