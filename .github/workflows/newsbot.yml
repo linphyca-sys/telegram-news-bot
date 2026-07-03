@@ -16,7 +16,7 @@ permissions:
 jobs:
   check-news:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -33,6 +33,7 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           NAVER_CLIENT_ID: ${{ secrets.NAVER_CLIENT_ID }}
           NAVER_CLIENT_SECRET: ${{ secrets.NAVER_CLIENT_SECRET }}
+          MAX_PER_KEYWORD: "0"   # 무제한 (건수 제한 없이 전량 전송)
         run: python news_bot.py --once
 
       - name: 전송 기록 저장

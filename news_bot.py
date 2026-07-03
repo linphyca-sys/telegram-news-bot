@@ -71,7 +71,7 @@ def passes_filter(article: dict, kw: dict) -> bool:
         return False
     return True
 INTERVAL_MINUTES = float(os.getenv("INTERVAL_MINUTES", "5"))
-MAX_PER_KEYWORD = int(os.getenv("MAX_PER_KEYWORD", "5"))      # 1회 검색당 키워드별 최대 전송 수
+MAX_PER_KEYWORD = int(os.getenv("MAX_PER_KEYWORD", "5"))      # 1회 검색당 키워드별 최대 전송 수 (0 이하 = 무제한)
 FIRST_RUN_SEND = int(os.getenv("FIRST_RUN_SEND", "3"))        # 최초 실행 시 키워드별 전송 수
 
 NAVER_CLIENT_ID = os.getenv("NAVER_CLIENT_ID", "").strip()
@@ -272,7 +272,10 @@ def check_once(seen: dict, first_run: bool) -> None:
 
         fresh = [a for a in articles if a["link"] and a["link"] not in seen]
         matched = [a for a in fresh if passes_filter(a, kw)]
-        limit = FIRST_RUN_SEND if first_run else MAX_PER_KEYWORD
+        if first_run:
+            limit = FIRST_RUN_SEND
+        else:
+            limit = MAX_PER_KEYWORD if MAX_PER_KEYWORD > 0 else None  # None = 무제한
         to_send = matched[:limit]
 
         # 전송하지 않는 기사(필터 탈락 포함)도 '본 것'으로 기록
@@ -293,7 +296,7 @@ def check_once(seen: dict, first_run: bool) -> None:
                     a["title"] = full_title
             if send_telegram(build_message(a)):
                 log_to_csv(kw["query"], a)
-            time.sleep(1)  # 텔레그램 rate limit 여유
+            time.sleep(3)  # 텔레그램은 같은 채널에 분당 ~20건 제한 — 3초 간격이면 안전
 
 def main() -> None:
     if not BOT_TOKEN or not CHAT_ID:
