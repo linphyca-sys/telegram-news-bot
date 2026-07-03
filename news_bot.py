@@ -120,6 +120,33 @@ def clean_text(s: str) -> str:
     s = re.sub(r"<[^>]+>", "", s or "")
     return html.unescape(s).strip()
 
+# 네이버 API가 긴 제목을 "..."로 잘라서 주므로, 기사 페이지의 og:title에서 원제목을 가져옴
+OG_TITLE_RES = [
+    re.compile(r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']+)["\']', re.I),
+    re.compile(r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:title["\']', re.I),
+]
+
+def fetch_full_title(url: str):
+    """기사 페이지 앞부분만 받아 og:title 추출. 실패하면 None."""
+    try:
+        resp = requests.get(
+            url, timeout=10, stream=True,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; newsbot)"},
+        )
+        chunk = next(resp.iter_content(65536), b"") or b""
+        resp.close()
+    except requests.RequestException:
+        return None
+    for enc in ("utf-8", "euc-kr"):
+        head = chunk.decode(enc, errors="ignore")
+        for pattern in OG_TITLE_RES:
+            m = pattern.search(head)
+            if m:
+                title = clean_text(m.group(1))
+                if title:
+                    return title
+    return None
+
 def search_naver(keyword: str) -> list:
     """네이버 뉴스 검색 API (최신순)"""
     resp = requests.get(
@@ -246,6 +273,10 @@ def check_once(seen: dict, first_run: bool) -> None:
         )
         save_seen(seen)  # 전송 도중 중단돼도 중복 전송을 막기 위해 미리 저장
         for a in reversed(to_send):  # 오래된 것부터 전송
+            if a["title"].endswith(("...", "…")):  # 잘린 제목이면 원제목 시도
+                full_title = fetch_full_title(a["link"])
+                if full_title:
+                    a["title"] = full_title
             if send_telegram(build_message(a)):
                 log_to_csv(kw["query"], a)
             time.sleep(1)  # 텔레그램 rate limit 여유
