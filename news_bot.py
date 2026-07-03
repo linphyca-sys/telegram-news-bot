@@ -121,13 +121,30 @@ def clean_text(s: str) -> str:
     return html.unescape(s).strip()
 
 # 네이버 API가 긴 제목을 "..."로 잘라서 주므로, 기사 페이지의 og:title에서 원제목을 가져옴
-OG_TITLE_RES = [
-    re.compile(r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']+)["\']', re.I),
-    re.compile(r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:title["\']', re.I),
-]
+def _og_meta(head: str, prop: str):
+    for pattern in (
+        re.compile(rf'<meta[^>]+property=["\']og:{prop}["\'][^>]+content=["\']([^"\']+)["\']', re.I),
+        re.compile(rf'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:{prop}["\']', re.I),
+    ):
+        m = pattern.search(head)
+        if m:
+            value = clean_text(m.group(1))
+            if value:
+                return value
+    return None
+
+def strip_site_name(title: str, site_name) -> str:
+    """제목 끝의 '| 매체명' / '- 매체명' 꼬리표 제거.
+    페이지가 밝힌 매체명(og:site_name)과 정확히 일치할 때만 잘라서 오탐 방지."""
+    if not site_name:
+        return title
+    m = re.match(r"^(.*\S)\s*[|\-–—:]\s*(.+?)$", title)
+    if m and m.group(2).strip().lower() == site_name.strip().lower():
+        return m.group(1).strip(" |-–—:")
+    return title
 
 def fetch_full_title(url: str):
-    """기사 페이지 앞부분만 받아 og:title 추출. 실패하면 None."""
+    """기사 페이지 앞부분만 받아 og:title 추출 (매체명 꼬리표 제거). 실패하면 None."""
     try:
         resp = requests.get(
             url, timeout=10, stream=True,
@@ -139,12 +156,9 @@ def fetch_full_title(url: str):
         return None
     for enc in ("utf-8", "euc-kr"):
         head = chunk.decode(enc, errors="ignore")
-        for pattern in OG_TITLE_RES:
-            m = pattern.search(head)
-            if m:
-                title = clean_text(m.group(1))
-                if title:
-                    return title
+        title = _og_meta(head, "title")
+        if title:
+            return strip_site_name(title, _og_meta(head, "site_name"))
     return None
 
 def search_naver(keyword: str) -> list:
