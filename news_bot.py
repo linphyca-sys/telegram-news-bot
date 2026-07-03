@@ -30,16 +30,45 @@ except AttributeError:
 # ── 설정 ──────────────────────────────────────────────────────────
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
-KEYWORDS = [k.strip() for k in os.getenv("KEYWORDS", "").split(",") if k.strip()]
+
+def parse_keyword_line(line: str) -> dict:
+    """'검색어 | 제외: a, b | 포함: x, y' 형식 파싱. 필터는 선택사항."""
+    parts = [p.strip() for p in line.split("|")]
+    kw = {"query": parts[0], "include": [], "exclude": []}
+    for part in parts[1:]:
+        if ":" not in part:
+            continue
+        label, words = part.split(":", 1)
+        words = [w.strip() for w in words.split(",") if w.strip()]
+        if label.strip() in ("제외", "exclude"):
+            kw["exclude"] = words
+        elif label.strip() in ("포함", "include"):
+            kw["include"] = words
+    return kw
+
+KEYWORDS = [
+    parse_keyword_line(k.strip())
+    for k in os.getenv("KEYWORDS", "").split(",")
+    if k.strip()
+]
 if not KEYWORDS:
     # 환경변수에 없으면 keywords.txt에서 읽기 (한 줄에 하나씩)
     kw_file = BASE_DIR / "keywords.txt"
     if kw_file.exists():
         KEYWORDS = [
-            line.strip()
+            parse_keyword_line(line.strip())
             for line in kw_file.read_text(encoding="utf-8").splitlines()
             if line.strip() and not line.strip().startswith("#")
         ]
+
+def passes_filter(article: dict, kw: dict) -> bool:
+    """제외 단어가 하나라도 있으면 탈락, 포함 단어가 지정됐으면 하나는 있어야 통과."""
+    text = f"{article['title']} {article['description']}"
+    if any(w in text for w in kw["exclude"]):
+        return False
+    if kw["include"] and not any(w in text for w in kw["include"]):
+        return False
+    return True
 INTERVAL_MINUTES = float(os.getenv("INTERVAL_MINUTES", "5"))
 MAX_PER_KEYWORD = int(os.getenv("MAX_PER_KEYWORD", "5"))      # 1회 검색당 키워드별 최대 전송 수
 FIRST_RUN_SEND = int(os.getenv("FIRST_RUN_SEND", "3"))        # 최초 실행 시 키워드별 전송 수
@@ -133,13 +162,12 @@ def format_kst(dt: datetime) -> str:
     hour12 = dt.hour % 12 or 12
     return f"{dt.year}.{dt.month:02d}.{dt.day:02d}. {ampm} {hour12}:{dt.minute:02d}"
 
-def build_message(keyword: str, article: dict) -> str:
+def build_message(article: dict) -> str:
     title = html.escape(article["title"])
     desc = html.escape(article["description"])
     if len(desc) > 300:
         desc = desc[:300] + "..."
     return (
-        f"🔍 <b>#{html.escape(keyword)}</b>\n\n"
         f"<b>{title}</b>\n\n"
         f"{desc}\n\n"
         f"📅 {format_kst(article['published'])}\n"
@@ -175,26 +203,31 @@ def send_telegram(text: str) -> bool:
 # ── 메인 루프 ─────────────────────────────────────────────────────
 def check_once(seen: dict, first_run: bool) -> None:
     now = datetime.now(KST).strftime("%H:%M:%S")
-    for keyword in KEYWORDS:
+    for kw in KEYWORDS:
         try:
-            articles = search_news(keyword)
+            articles = search_news(kw["query"])
         except Exception as e:
-            print(f"[{now}] '{keyword}' 검색 실패: {e}")
+            print(f"[{now}] '{kw['query']}' 검색 실패: {e}")
             continue
 
         fresh = [a for a in articles if a["link"] and a["link"] not in seen]
+        matched = [a for a in fresh if passes_filter(a, kw)]
         limit = FIRST_RUN_SEND if first_run else MAX_PER_KEYWORD
-        to_send = fresh[:limit]
+        to_send = matched[:limit]
 
-        # 전송하지 않는 기사도 '본 것'으로 기록 (최초 실행 시 과거 기사 도배 방지)
+        # 전송하지 않는 기사(필터 탈락 포함)도 '본 것'으로 기록
         stamp = time.time()
         for a in fresh:
             seen[a["link"]] = stamp
 
-        print(f"[{now}] '{keyword}': 새 기사 {len(fresh)}건, {len(to_send)}건 전송")
+        filtered_out = len(fresh) - len(matched)
+        print(
+            f"[{now}] '{kw['query']}': 새 기사 {len(fresh)}건"
+            f" (필터 제외 {filtered_out}건), {len(to_send)}건 전송"
+        )
         save_seen(seen)  # 전송 도중 중단돼도 중복 전송을 막기 위해 미리 저장
         for a in reversed(to_send):  # 오래된 것부터 전송
-            send_telegram(build_message(keyword, a))
+            send_telegram(build_message(a))
             time.sleep(1)  # 텔레그램 rate limit 여유
 
 def main() -> None:
@@ -207,7 +240,8 @@ def main() -> None:
 
     source = "네이버 뉴스 API" if USE_NAVER else "구글 뉴스 RSS"
     mode = "1회 실행" if once else f"{INTERVAL_MINUTES}분 주기"
-    print(f"뉴스봇 시작 — 소스: {source}, 키워드: {KEYWORDS}, 모드: {mode}")
+    kw_names = [k["query"] for k in KEYWORDS]
+    print(f"뉴스봇 시작 — 소스: {source}, 키워드: {kw_names}, 모드: {mode}")
 
     seen = load_seen()
     first_run = not seen
