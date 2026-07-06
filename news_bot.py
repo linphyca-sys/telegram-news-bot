@@ -122,7 +122,13 @@ def save_seen(seen: dict) -> None:
 # ── 뉴스 검색 ─────────────────────────────────────────────────────
 def clean_text(s: str) -> str:
     s = re.sub(r"<[^>]+>", "", s or "")
-    return html.unescape(s).strip()
+    # 일부 언론사는 이중 이스케이프된 제목을 줌 (&amp;quot; → &quot;) — 안정될 때까지 해제
+    for _ in range(3):
+        unescaped = html.unescape(s)
+        if unescaped == s:
+            break
+        s = unescaped
+    return s.strip()
 
 # 네이버 API가 긴 제목을 "..."로 잘라서 주므로, 기사 페이지의 og:title에서 원제목을 가져옴
 def _og_meta(head: str, prop: str):
