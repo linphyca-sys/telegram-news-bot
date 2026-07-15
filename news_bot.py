@@ -291,7 +291,8 @@ def send_telegram(text: str) -> bool:
             print(f"  [!] 텔레그램 전송 실패: {resp.status_code} {resp.text}")
             return False
         except requests.RequestException as e:
-            print(f"  [!] 텔레그램 전송 오류 (시도 {attempt + 1}/3): {e}")
+            # 예외 메시지에 토큰이 든 URL이 섞일 수 있어 종류만 기록 (공개 저장소 로그 대비)
+            print(f"  [!] 텔레그램 전송 오류 (시도 {attempt + 1}/3): {type(e).__name__}")
             time.sleep(3)
     return False
 
