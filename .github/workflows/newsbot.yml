@@ -10,7 +10,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   check-news:
@@ -18,6 +18,21 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: 비공개 전송 기록 체크아웃
+        uses: actions/checkout@v4
+        with:
+          repository: linphyca-sys/newsbot-state
+          ref: main
+          ssh-key: ${{ secrets.STATE_REPO_SSH_KEY }}
+          path: .state
+
+      - name: 전송 기록 복원
+        run: |
+          cp .state/telegram-news-bot/seen_links.json seen_links.json
+          cp .state/telegram-news-bot/articles.csv articles.csv
 
       - uses: actions/setup-python@v5
         with:
@@ -35,19 +50,20 @@ jobs:
           MAX_PER_KEYWORD: "0"   # 무제한 (건수 제한 없이 전량 전송)
         run: python news_bot.py --once
 
-      - name: 전송 기록 저장
+      - name: 전송 기록 비공개 저장
+        working-directory: .state
         run: |
+          cp ../seen_links.json telegram-news-bot/seen_links.json
+          cp ../articles.csv telegram-news-bot/articles.csv
           git config user.name "news-bot"
           git config user.email "actions@users.noreply.github.com"
-          git add seen_links.json
-          if [ -f articles.csv ]; then git add articles.csv; fi
+          git add telegram-news-bot/seen_links.json telegram-news-bot/articles.csv
           git diff --cached --quiet && exit 0
           git commit -m "기사 전송 기록 갱신"
-          # 실행 중 저장소가 앞서갔을 수 있으므로 rebase 후 push (실패 시 rebase 정리 후 재시도)
-          for i in 1 2 3 4 5; do
-            if git pull --rebase origin master && git push; then exit 0; fi
+          for i in 1 2 3 4 5 6 7 8; do
+            if git pull --rebase origin main && git push origin main; then exit 0; fi
             git rebase --abort 2>/dev/null || true
-            sleep 5
+            sleep $((i * 3))
           done
-          echo "기록 저장 실패 — 다음 실행에서 자동 반영됨"
-          exit 0
+          echo "비공개 전송 기록 저장 실패"
+          exit 1
